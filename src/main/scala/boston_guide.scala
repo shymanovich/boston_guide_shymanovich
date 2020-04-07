@@ -3,10 +3,8 @@ import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.broadcast
 
-case class codesStats(DISTRICT: String, crime_type: String, count: Long)
 
-object boston_guide {
-
+  object boston_guide {
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession
@@ -27,7 +25,7 @@ object boston_guide {
       .option("inferSchema", "true")
       .load(args(1))
 
-    crimeCodes.dropDuplicates()
+    val crimesCodesFiltered = crimeCodes.dropDuplicates()
 
     val filteredCachedCrimeFacts = crimeFacts
       .select($"DISTRICT", $"YEAR", $"MONTH", $"OFFENSE_CODE", $"Lat", $"Long")
@@ -50,24 +48,21 @@ object boston_guide {
 
 //         frequent_crime_types - три самых частых crime_type за всю историю наблюдений в этом районе, объединенных через запятую с одним пробелом “, ” , расположенных в порядке убывания частоты
 
-    val offenseCodesBroadcast = broadcast(crimeCodes)
+    val offenseCodesBroadcast = broadcast(crimesCodesFiltered)
 
     val frequentCrimes = filteredCachedCrimeFacts
       .join(offenseCodesBroadcast, $"CODE" === $"OFFENSE_CODE")
       .withColumn("crime_type", trim((split($"NAME", "-")).getItem(0)))
       .groupBy($"DISTRICT", $"crime_type")
       .count()
-      .as[codesStats]
-      .groupByKey(x => x.DISTRICT)
-      .flatMapGroups {
-        case (district, elements) =>
-          elements.toList.sortBy(x => -x.count).take(3)
-      }
+      .withColumn("row_num", row_number() over (Window.partitionBy($"DISTRICT")).orderBy($"count".desc))
+      .where($"row_num" <= 3)
       .withColumn(
         "frequent_crime_types", collect_list($"crime_type") over (Window.partitionBy($"DISTRICT"))
       )
       .select($"DISTRICT".as("fct_join"), $"frequent_crime_types")
-      .distinct()
+      .dropDuplicates()
+      
 
 //                lat - широта координаты района, расчитанная как среднее по всем широтам инцидентов
     val latDistrict = filteredCachedCrimeFacts
